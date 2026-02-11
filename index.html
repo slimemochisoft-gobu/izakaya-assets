@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Izakaya Gobu - Simulator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #050505; font-family: 'Courier New', monospace; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        .interactive { pointer-events: auto; }
+        .hud-box { background: rgba(20, 20, 20, 0.9); border: 2px solid #5d4037; border-radius: 4px; padding: 12px; color: #fbbf24; box-shadow: 0 0 15px rgba(0,0,0,0.5); }
+        .btn-cam { background: #3e2723; border: 1px solid #5d4037; color: #d7ccc8; padding: 8px 15px; cursor: pointer; transition: all 0.2s; }
+        .btn-cam:hover { background: #5d4037; color: #fff; }
+        #debug-log { position: absolute; bottom: 10px; right: 10px; background: rgba(0,0,0,0.8); color: #00ff00; font-size: 10px; padding: 10px; max-width: 350px; pointer-events: none; border: 1px solid #333; height: 150px; overflow-y: hidden; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="p-4 flex justify-between items-start">
+            <div class="hud-box interactive">
+                <h2 class="font-bold text-xl mb-1 text-orange-400">Izakaya de Gobu</h2>
+                <div class="text-sm">
+                    <p>💰 Oro: <span id="gold-ui">120</span></p>
+                    <p>⭐ Reputación: <span id="rep-ui">15</span></p>
+                    <p id="status-msg" class="italic text-gray-400 mt-2">Cargando almacén organizado...</p>
+                </div>
+            </div>
+            <div class="flex flex-col gap-2 items-end">
+                <div class="flex gap-2">
+                    <button onclick="window.girarCamara(-1)" class="btn-cam interactive">↺ Girar</button>
+                    <button onclick="window.girarCamara(1)" class="btn-cam interactive">Girar ↻</button>
+                </div>
+            </div>
+        </div>
+        <div id="debug-log"></div>
+    </div>
+
+    <script type="module">
+        const CONFIG = {
+            TIEMPO_COMIENDO: 8000,
+            INTERVALO_SPAWN: 6000,
+            VELOCIDAD_GOBLIN: 1.8,
+            VELOCIDAD_WALK_NORMAL: 3.5,
+            CAMERA_DISTANCE: 7,
+            CAMERA_ROTATION_SPEED: 0.08,
+            CAMERA_ANGLE_INICIAL: Math.PI / 4,
+            CAMERA_ANGLE_STEP: Math.PI / 2,
+            OFFSET_BOWL_Y: 0.56,
+        };
+
+        const logElem = document.getElementById('debug-log');
+        function addLog(msg, isError = false) {
+            const line = document.createElement('div');
+            line.style.color = isError ? '#ff4444' : '#00ff00';
+            line.innerText = `> ${msg}`;
+            logElem.appendChild(line);
+            logElem.scrollTop = logElem.scrollHeight;
+        }
+
+        const clock = new THREE.Clock();
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0a0a);
+
+        const loader = new THREE.GLTFLoader();
+        const texLoader = new THREE.TextureLoader();
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        document.body.appendChild(renderer.domElement);
+
+        const aspect = window.innerWidth / window.innerHeight;
+        const d = CONFIG.CAMERA_DISTANCE;
+        const camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 0.1, 1000);
+        const cameraPivot = new THREE.Group();
+        scene.add(cameraPivot);
+        camera.position.set(0, 10, -10);
+        camera.lookAt(0, 0, 0);
+        cameraPivot.add(camera);
+        cameraPivot.rotation.y = CONFIG.CAMERA_ANGLE_INICIAL;
+        
+        let targetRotation = CONFIG.CAMERA_ANGLE_INICIAL;
+        window.girarCamara = (dir) => { targetRotation += CONFIG.CAMERA_ANGLE_STEP * dir; };
+
+        scene.add(new THREE.AmbientLight(0xffffff, 1.2));
+        const point = new THREE.PointLight(0xffaa44, 2, 20);
+        point.position.set(0, 5, 0);
+        scene.add(point);
+
+        const resourceCache = {
+            models: new Map(),
+            textures: new Map(),
+            async loadModel(name) {
+                const path = `./models/${name}`; 
+                if (this.models.has(name)) return this.models.get(name).clone();
+                return new Promise((resolve) => {
+                    loader.load(path, 
+                        (gltf) => {
+                            addLog(`MODELO OK: ${name}`);
+                            this.models.set(name, gltf.scene);
+                            resolve(gltf.scene.clone());
+                        },
+                        undefined,
+                        (error) => {
+                            addLog(`ERROR MODELO: ${name}`, true);
+                            resolve(createPlaceholder(name));
+                        }
+                    );
+                });
+            },
+            loadTexture(name) {
+                if (this.textures.has(name)) return this.textures.get(name);
+                const tex = texLoader.load(`./textures/${name}`);
+                this.textures.set(name, tex);
+                return tex;
+            }
+        };
+
+        function createPlaceholder(name) {
+            const group = new THREE.Group();
+            let color = name.includes('goblin') ? 0x22aa22 : (name.includes('npc') ? 0x2222aa : 0xaa2222);
+            const mesh = new THREE.Mesh(
+                new THREE.BoxGeometry(0.6, 1.2, 0.6),
+                new THREE.MeshStandardMaterial({ color, wireframe: true })
+            );
+            mesh.position.y = 0.6;
+            group.add(mesh);
+            return group;
+        }
+
+        const slots = [
+            { id: '1', pos: { x: -1.2, z: -1.2 }, spawn: { x: -1.2, z: -6 }, ocupado: false, bowl: null },
+            { id: '2', pos: { x: 1.2, z: -1.2 }, spawn: { x: 1.2, z: -6 }, ocupado: false, bowl: null }
+        ];
+
+        let npcs = [];
+        let pedidos = [];
+
+        const goblin = {
+            mesh: null, estado: 'IDLE',
+            async init() {
+                this.mesh = await resourceCache.loadModel('char_goblin.glb');
+                this.mesh.position.set(0, 0, 0.5);
+                scene.add(this.mesh);
+            },
+            update(delta) {
+                if (!this.mesh) return;
+                if (this.estado === 'IDLE' && pedidos.length > 0) {
+                    this.target = pedidos.shift();
+                    this.estado = 'SERVIR';
+                }
+                if (this.estado === 'SERVIR') {
+                    this.mover(this.target.pos.x * 0.4, this.target.pos.z * 0.4, delta, () => {
+                        this.estado = 'HOME';
+                        gestionarComida(this.target, 'item_food_ramen.glb');
+                        const n = npcs.find(x => x.slot === this.target);
+                        if(n) {
+                            n.estado = 'COMIENDO';
+                            if(n.bubble) n.bubble.visible = false; 
+                        }
+                    });
+                }
+                if (this.estado === 'HOME') {
+                    this.mover(0, 0.5, delta, () => { this.estado = 'IDLE'; });
+                }
+            },
+            mover(tx, tz, delta, cb) {
+                const d = Math.sqrt((tx-this.mesh.position.x)**2 + (tz-this.mesh.position.z)**2);
+                if(d > 0.1) {
+                    this.mesh.position.x += ((tx-this.mesh.position.x)/d) * CONFIG.VELOCIDAD_GOBLIN * delta;
+                    this.mesh.position.z += ((tz-this.mesh.position.z)/d) * CONFIG.VELOCIDAD_GOBLIN * delta;
+                    this.mesh.lookAt(tx, 0, tz);
+                } else cb();
+            }
+        };
+
+        class Cliente {
+            constructor(m, s) { 
+                this.mesh = m; 
+                this.slot = s; 
+                this.estado = 'IN'; 
+                this.t = 0;
+                this.bubble = null;
+                this.crearBurbujaHambre();
+            }
+
+            crearBurbujaHambre() {
+                // Usa tu imagen hambre.png de la carpeta textures
+                const spriteMap = resourceCache.loadTexture('hambre.png');
+                const spriteMat = new THREE.SpriteMaterial({ map: spriteMap, transparent: true });
+                this.bubble = new THREE.Sprite(spriteMat);
+                this.bubble.scale.set(0.6, 0.6, 1);
+                this.bubble.position.set(0, 2.2, 0);
+                this.bubble.visible = false;
+                this.mesh.add(this.bubble);
+            }
+
+            update(delta) {
+                if(this.estado === 'IN') {
+                    this.mover(this.slot.pos.x, this.slot.pos.z, delta, () => {
+                        this.estado = 'WAIT'; 
+                        pedidos.push(this.slot);
+                        if(this.bubble) this.bubble.visible = true; 
+                    });
+                } else if(this.estado === 'COMIENDO') {
+                    this.t += delta * 1000;
+                    if(this.t > CONFIG.TIEMPO_COMIENDO) {
+                        gestionarComida(this.slot, null);
+                        this.estado = 'OUT';
+                    }
+                } else if(this.estado === 'OUT') {
+                    this.mover(this.slot.spawn.x, this.slot.spawn.z, delta, () => {
+                        scene.remove(this.mesh);
+                        npcs = npcs.filter(x => x !== this);
+                        this.slot.ocupado = false;
+                    });
+                }
+            }
+            mover(tx, tz, delta, cb) {
+                const d = Math.sqrt((tx-this.mesh.position.x)**2 + (tz-this.mesh.position.z)**2);
+                if(d > 0.1) {
+                    this.mesh.position.x += ((tx-this.mesh.position.x)/d) * CONFIG.VELOCIDAD_WALK_NORMAL * delta;
+                    this.mesh.position.z += ((tz-this.mesh.position.z)/d) * CONFIG.VELOCIDAD_WALK_NORMAL * delta;
+                    this.mesh.lookAt(tx, 0, tz);
+                } else cb();
+            }
+        }
+
+        async function gestionarComida(slot, model) {
+            if(slot.bowl) scene.remove(slot.bowl);
+            if(!model) return;
+            slot.bowl = await resourceCache.loadModel(model);
+            slot.bowl.position.set(slot.pos.x, CONFIG.OFFSET_BOWL_Y, slot.pos.z);
+            scene.add(slot.bowl);
+        }
+
+        async function spawn() {
+            const s = slots.find(x => !x.ocupado);
+            if(!s) return;
+            s.ocupado = true;
+            const m = await resourceCache.loadModel('char_npc_base.glb');
+            m.position.set(s.spawn.x, 0, s.spawn.z);
+            scene.add(m);
+            npcs.push(new Cliente(m, s));
+        }
+
+        async function init() {
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(25,25), new THREE.MeshStandardMaterial({color: 0x111111}));
+            floor.rotation.x = -Math.PI/2;
+            scene.add(floor);
+
+            const iz = await resourceCache.loadModel('struct_izakaya_v1.glb');
+            scene.add(iz);
+
+            for(let s of slots) {
+                const chair = await resourceCache.loadModel('prop_chair_box.glb');
+                chair.position.set(s.pos.x, 0, s.pos.z);
+                scene.add(chair);
+            }
+
+            await goblin.init();
+            document.getElementById('status-msg').innerText = "Izakaya Abierta - Gobu a tus órdenes";
+            addLog("Assets cargados desde carpetas.");
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const d = clock.getDelta();
+            cameraPivot.rotation.y = THREE.MathUtils.lerp(cameraPivot.rotation.y, targetRotation, CONFIG.CAMERA_ROTATION_SPEED);
+            goblin.update(d);
+            npcs.forEach(n => n.update(d));
+            renderer.render(scene, camera);
+        }
+
+        init();
+        animate();
+        setInterval(spawn, CONFIG.INTERVALO_SPAWN);
+    </script>
+</body>
+</html>
