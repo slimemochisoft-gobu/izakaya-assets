@@ -26,7 +26,7 @@
                 <div class="text-sm">
                     <p>💰 Oro: <span id="gold-ui">120</span></p>
                     <p>⭐ Reputación: <span id="rep-ui">15</span></p>
-                    <p id="status-msg" class="italic text-gray-400 mt-2">Cargando almacén organizado...</p>
+                    <p id="status-msg" class="italic text-gray-400 mt-2">Conectando con el almacén de GitHub...</p>
                 </div>
             </div>
             <div class="flex flex-col gap-2 items-end">
@@ -40,6 +40,10 @@
     </div>
 
     <script type="module">
+        // --- CONFIGURACIÓN DE RUTAS (IMPORTANTE) ---
+        // Cambia 'TU_USUARIO' por tu nombre de usuario de GitHub en la siguiente línea:
+        const REPO_BASE = "https://raw.githubusercontent.com/slimemochisoft-gobu/izakaya-assets/main/";
+
         const CONFIG = {
             TIEMPO_COMIENDO: 8000,
             INTERVALO_SPAWN: 6000,
@@ -67,6 +71,9 @@
 
         const loader = new THREE.GLTFLoader();
         const texLoader = new THREE.TextureLoader();
+        // Permitir carga de texturas desde dominios externos (GitHub)
+        texLoader.setCrossOrigin('anonymous');
+
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
@@ -95,7 +102,7 @@
             models: new Map(),
             textures: new Map(),
             async loadModel(name) {
-                const path = `./models/${name}`; 
+                const path = `${REPO_BASE}models/${name}`; 
                 if (this.models.has(name)) return this.models.get(name).clone();
                 return new Promise((resolve) => {
                     loader.load(path, 
@@ -106,7 +113,7 @@
                         },
                         undefined,
                         (error) => {
-                            addLog(`ERROR MODELO: ${name}`, true);
+                            addLog(`ERROR MODELO: ${name} (Usando cubo temporal)`, true);
                             resolve(createPlaceholder(name));
                         }
                     );
@@ -114,7 +121,7 @@
             },
             loadTexture(name) {
                 if (this.textures.has(name)) return this.textures.get(name);
-                const tex = texLoader.load(`./textures/${name}`);
+                const tex = texLoader.load(`${REPO_BASE}textures/${name}`);
                 this.textures.set(name, tex);
                 return tex;
             }
@@ -189,7 +196,6 @@
             }
 
             crearBurbujaHambre() {
-                // Usa tu imagen hambre.png de la carpeta textures
                 const spriteMap = resourceCache.loadTexture('hambre.png');
                 const spriteMat = new THREE.SpriteMaterial({ map: spriteMap, transparent: true });
                 this.bubble = new THREE.Sprite(spriteMat);
@@ -263,8 +269,8 @@
             }
 
             await goblin.init();
-            document.getElementById('status-msg').innerText = "Izakaya Abierta - Gobu a tus órdenes";
-            addLog("Assets cargados desde carpetas.");
+            document.getElementById('status-msg').innerText = "Izakaya Abierta - Cargando desde GitHub";
+            addLog("Iniciando carga remota...");
         }
 
         function animate() {
